@@ -1,0 +1,17 @@
+{
+  "_comment": "Fill in real NttManager addresses + RPCs for the deployment you are auditing. wormhole_chain_id values are Wormhole chain IDs (https://docs.wormhole.com/wormhole/reference/constants), NOT EVM chain ids. Include two or more deployments to enable the cross-chain peer/decimals checks. Only EVM managers are read by this scanner.",
+  "deployments": [
+    {
+      "chain": "Ethereum",
+      "wormhole_chain_id": 2,
+      "rpc": "https://ethereum-rpc.publicnode.com",
+      "manager": "0x0000000000000000000000000000000000000000"
+    },
+    {
+      "chain": "Arbitrum",
+      "wormhole_chain_id": 23,
+      "rpc": "https://arbitrum-one-rpc.publicnode.com",
+      "manager": "0x0000000000000000000000000000000000000000"
+    }
+  ]
+}

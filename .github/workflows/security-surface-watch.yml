@@ -1,0 +1,37 @@
+name: security-surface-watch
+
+# Flags PRs that touch the protocol's critical attack surface (mint/unlock,
+# attestation/quorum/replay, VAA verification, decimals, rate limiting,
+# handler overrides, new transceivers, access/upgrade, serialization) so the
+# right lines get audited first. Posts a summary; does not block merges.
+
+on:
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+jobs:
+  surface-watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # need base..head history for the diff
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Score security-surface changes
+        id: scan
+        run: |
+          BASE="origin/${{ github.base_ref }}"
+          git fetch --no-tags origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+          python3 security/surface_watch.py --base "$BASE" --head HEAD > report.md || echo "HIGH_TOUCHED=1" >> "$GITHUB_ENV"
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Annotate when high-risk surface is touched
+        if: env.HIGH_TOUCHED == '1'
+        run: echo "::warning title=Security surface touched::This PR modifies HIGH-risk NTT surface — see the job summary and prioritize those files in review."
