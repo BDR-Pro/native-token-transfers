@@ -73,6 +73,7 @@ def load(dep):
     info["transceivers"] = c.functions.getTransceivers().call()
     info["decimals"] = c.functions.tokenDecimals().call()
     info["owner"] = c.functions.owner().call()
+    info["owner_is_eoa"] = len(w3.eth.get_code(Web3.to_checksum_address(info["owner"]))) == 0
     try:
         info["paused"] = c.functions.isPaused().call()
     except Exception:
@@ -107,8 +108,7 @@ def check_single(info):
     elif th == ntx == 1:
         add("INFO", chain, "single transceiver, threshold 1: no attestation redundancy (inherent to 1-transceiver deployments).")
 
-    code = info["w3"].eth.get_code(Web3.to_checksum_address(info["owner"]))
-    if len(code) == 0:
+    if info["owner_is_eoa"]:
         add("MED", chain, f"owner {info['owner']} is an EOA (no code): a single key controls peers/threshold/upgrade — centralization / rug risk.")
 
     if info["paused"]:
@@ -150,6 +150,45 @@ def check_pair(a, b):
             pass
 
 
+def amplifier_profile(info):
+    """Rank how much this deployment's config AMPLIFIES a hypothetical single
+    component bug (a transceiver/VAA-verification weakness, or owner-key exposure)
+    into a critical. High score = a medium-severity bug becomes an unbacked-mint or
+    total-drain CRITICAL *on this deployment*. This is the targeting signal: pair a
+    high-amplifier route with a fresh finding from surface_watch.py.
+    Returns (score, [(tag, note), ...])."""
+    chain = info["dep"]["chain"]
+    ntx = len(info["transceivers"])
+    th = info["threshold"]
+    score, notes = 0, []
+
+    # 1-of-N quorum: a single forged attestation IS full quorum.
+    if th == 1:
+        score += 50
+        if ntx >= 2:
+            notes.append(("CRIT-IF", f"1-of-{ntx} quorum — redundancy exists but is bypassed: ANY single "
+                          f"transceiver/VAA-verification bug forges quorum => unbacked-mint critical."))
+        else:
+            notes.append(("CRIT-IF", f"single transceiver, threshold 1 — no redundancy: one transceiver or "
+                          f"VAA-verification bug => unbacked-mint critical."))
+    elif th >= 2:
+        notes.append(("harder", f"{th}-of-{ntx} quorum: a component bug needs {th} independent compromises "
+                      f"to mint => much harder target."))
+
+    # EOA owner: key exposure OR any owner-tricking bug => total drain via setPeer/upgrade.
+    if info.get("owner_is_eoa"):
+        score += 30
+        notes.append(("CRIT-IF", f"EOA owner {info['owner']}: any owner-key exposure or owner-tricking bug "
+                      f"(malicious _handleAdditionalPayload override, gov-message parse bug) => setPeer(evil)/"
+                      f"upgrade(evil) => total drain."))
+
+    # Not paused + live limits => a working target (amplifies exploitability, not severity).
+    if info.get("paused") is False and info.get("out_limit") not in (0, None):
+        score += 5
+
+    return score, notes
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -182,6 +221,22 @@ def main():
         print(f"{icon.get(sev,'?')} [{sev}] {chain}: {msg}")
     if not FIND:
         print("No misconfigurations detected. ✅")
+
+    # Amplifier ranking — which live route turns a component bug into a critical.
+    profiles = sorted(((amplifier_profile(i), i) for i in infos),
+                      key=lambda x: -x[0][0])
+    print("\n=== Critical-amplifier ranking (target the top routes) ===")
+    print("A high score means: if you (or surface_watch.py) find a transceiver/VAA/handler")
+    print("bug, it is a CRITICAL *here*. Pair the top route with a fresh finding.\n")
+    for (score, notes), info in profiles:
+        th, ntx = info["threshold"], len(info["transceivers"])
+        eoa = "EOA-owner" if info.get("owner_is_eoa") else "contract-owner"
+        band = "🔴 MAX" if score >= 50 else ("🟠 elevated" if score >= 30 else "🟢 hardened")
+        print(f"{band}  score={score:>3}  {info['dep']['chain']:<12} "
+              f"threshold={th} transceivers={ntx} {eoa}")
+        for tag, note in notes:
+            print(f"        [{tag}] {note}")
+
     return 1 if any(f[0] == "HIGH" for f in FIND) else 0
 
 
