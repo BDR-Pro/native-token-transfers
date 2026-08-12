@@ -91,10 +91,17 @@ def check_single(info):
     ntx = len(info["transceivers"])
     th = info["threshold"]
 
-    if th == 0:
-        add("HIGH", chain, f"threshold == 0 (inbound cannot be approved; invariant broken). transceivers={ntx}")
+    if th == 0 and ntx > 0:
+        # Canonical contracts forbid this via _checkThresholdInvariants; a live hit
+        # implies a forked/broken/corrupted deployment -> inbound permanently frozen.
+        add("HIGH", chain, f"threshold == 0 with {ntx} registered transceiver(s): inbound cannot be "
+                           f"approved -> PERMANENT FREEZE. Canonical NTT forbids this state; a live hit "
+                           f"means a non-standard/broken deployment (genuine critical if confirmed).")
     elif th > ntx:
-        add("HIGH", chain, f"threshold ({th}) > enabled transceivers ({ntx}): quorum unreachable, inbound transfers will be stuck.")
+        # Also invariant-protected on canonical contracts (see removeTransceiver / setThreshold).
+        add("HIGH", chain, f"threshold ({th}) > enabled transceivers ({ntx}): quorum unreachable -> "
+                           f"inbound transfers PERMANENTLY FROZEN. Canonical NTT forbids this; a live "
+                           f"hit implies a broken/forked deployment (genuine critical if confirmed).")
     elif th == 1 and ntx >= 2:
         add("MED", chain, f"threshold == 1 with {ntx} transceivers: a single transceiver compromise forges quorum. Consider raising the threshold.")
     elif th == ntx == 1:
@@ -124,10 +131,17 @@ def check_pair(a, b):
             add("MED", schain, f"peer for {dst['dep']['chain']} (wh id {dchain}) is UNSET (peerAddress == 0).")
             continue
         if peer_decimals != dst["decimals"]:
-            add("HIGH", schain,
+            # NOTE: this does NOT inflate value. The receiving manager untrims with
+            # its OWN runtime tokenDecimals(), so trim(source)->untrim(dest) preserves
+            # value regardless of peer.tokenDecimals (verified empirically). The peer
+            # config only affects wire trimming precision, so a mismatch causes extra
+            # dust loss and, if peer_decimals is small, TransferAmountHasDust reverts on
+            # that route (liveness/UX). Flag as a route-consistency bug, not a drain.
+            add("MED", schain,
                 f"peer.tokenDecimals for {dst['dep']['chain']} is {peer_decimals}, but "
-                f"{dst['dep']['chain']} token decimals is {dst['decimals']}. Mismatch skews "
-                f"untrim() on redeem -> amount inflation/deflation. VERIFY both sides.")
+                f"{dst['dep']['chain']} token decimals is {dst['decimals']}. Route "
+                f"inconsistency: extra dust loss / possible dust reverts. Value is "
+                f"preserved (not an inflation drain); fix the config for correct UX.")
         try:
             raw = src["c"].functions.getInboundLimitParams(dchain).call()
             if trimmed_amount_value(raw[0])[0] == 0:
